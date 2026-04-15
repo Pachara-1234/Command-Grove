@@ -1,10 +1,171 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>My First Website</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dorf Glove 3D Simulation</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #2c3e50; font-family: sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        #ui-panel {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(0, 0, 0, 0.8); color: white;
+            padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        button {
+            background: #3498db; color: white; border: none; padding: 10px 15px;
+            margin-top: 10px; border-radius: 5px; cursor: pointer; width: 100%;
+        }
+        button:hover { background: #2980b9; }
+        .active { background: #e74c3c !important; }
+    </style>
 </head>
 <body>
-    <h1>ยินดีต้อนรับสู่เว็บไซต์ของฉัน!</h1>
-    <p>สร้างด้วย GitHub Pages ครับผม</p>
+
+    <div id="ui-panel">
+        <h2>Dorf Glove Simulation</h2>
+        <p>Select Version to View:</p>
+        <button id="btn-v1" class="active" onclick="switchVersion(1)">Version 1: Original Draft</button>
+        <button id="btn-v2" onclick="switchVersion(2)">Version 2: Optimized (MUX + Li-Po)</button>
+        <div id="description" style="margin-top: 15px; font-size: 14px; color: #bdc3c7;">
+            <b>V1:</b> Pico W + 9V Battery + 5 Flex directly (Missing Analog Pins)
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        // 1. ตั้งค่า Scene, Camera, Renderer
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        // แสงสว่าง
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
+
+        // หมุนกล้องได้ (OrbitControls)
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        camera.position.set(0, 8, 12);
+        controls.update();
+
+        // 2. สร้างชิ้นส่วน (Materials)
+        const matHand = new THREE.MeshPhongMaterial({ color: 0xecf0f1, transparent: true, opacity: 0.5 }); // ถุงมือโปร่งแสง
+        const matPico = new THREE.MeshPhongMaterial({ color: 0x27ae60 }); // Pico W สีเขียว
+        const matFlex = new THREE.MeshPhongMaterial({ color: 0xf1c40f }); // Flex Sensor สีเหลือง
+        const matOLED = new THREE.MeshPhongMaterial({ color: 0x2c3e50 }); // หน้าจอสีดำ
+        const matMPU = new THREE.MeshPhongMaterial({ color: 0x2980b9 }); // MPU6050 สีฟ้า
+        const matBat9V = new THREE.MeshPhongMaterial({ color: 0xc0392b }); // แบต 9V สีแดง (V1)
+        const matBatLipo = new THREE.MeshPhongMaterial({ color: 0xbdc3c7 }); // แบต Li-Po สีเงิน (V2)
+        const matMUX = new THREE.MeshPhongMaterial({ color: 0x8e44ad }); // MUX สีม่วง (V2)
+        const matWireError = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 2 }); // สายไฟ V1 (แดง-ผิดพลาด)
+        const matWireOk = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 2 }); // สายไฟ V2 (เขียว-ใช้งานได้)
+
+        // Group หลักสำหรับใส่ทุกอย่าง
+        const gloveGroup = new THREE.Group();
+        scene.add(gloveGroup);
+
+        // 3. ปั้นส่วนของมือ (Base Hand)
+        const palmGeom = new THREE.BoxGeometry(4, 1, 5);
+        const palm = new THREE.Mesh(palmGeom, matHand);
+        gloveGroup.add(palm);
+
+        // สร้างนิ้วมือ 5 นิ้ว + Flex Sensors
+        const fingers = [];
+        const fingerXPos = [-1.5, -0.5, 0.5, 1.5, 2.5]; // ตำแหน่ง X ของนิ้วชี้ถึงก้อย และโป้ง
+        for(let i=0; i<5; i++) {
+            // นิ้วมือ
+            const fGeom = new THREE.BoxGeometry(0.8, 0.8, 3);
+            const finger = new THREE.Mesh(fGeom, matHand);
+            finger.position.set(fingerXPos[i], 0, -4);
+            if(i===4) { // นิ้วโป้ง
+                finger.position.set(2.5, 0, -1);
+                finger.rotation.y = Math.PI / 4;
+            }
+            gloveGroup.add(finger);
+
+            // Flex Sensor แปะบนนิ้ว
+            const flexGeom = new THREE.BoxGeometry(0.4, 0.1, 2.5);
+            const flex = new THREE.Mesh(flexGeom, matFlex);
+            flex.position.set(0, 0.5, 0); // อยู่บนผิวนิ้ว
+            finger.add(flex);
+        }
+
+        // 4. ติดตั้งอุปกรณ์หลัก (Common Parts)
+        const pico = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.3, 3), matPico);
+        pico.position.set(0, 0.65, 0.5); // กลางหลังมือ
+        gloveGroup.add(pico);
+
+        const oled = new THREE.Mesh(new THREE.BoxGeometry(1, 0.1, 1.5), matOLED);
+        oled.position.set(0, 0.85, 0); // แปะบน Pico
+        gloveGroup.add(oled);
+
+        const mpu = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.2, 0.8), matMPU);
+        mpu.position.set(-1, 0.65, 1.5); // ข้อมือซ้าย
+        gloveGroup.add(mpu);
+
+        // 5. ชิ้นส่วนที่ต้องสลับระหว่าง V1 และ V2
+        // V1 Parts: แบต 9V
+        const bat9V = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.8, 1), matBat9V);
+        bat9V.position.set(0, 0.9, 2);
+        gloveGroup.add(bat9V);
+
+        // V2 Parts: แบต Li-Po + MUX Chip
+        const batLipo = new THREE.Mesh(new THREE.BoxGeometry(2, 0.3, 1.5), matBatLipo);
+        batLipo.position.set(0, 0.9, 2);
+        batLipo.visible = false; // ซ่อนไว้ก่อน
+        gloveGroup.add(batLipo);
+
+        const mux = new THREE.Mesh(new THREE.BoxGeometry(1, 0.2, 1), matMUX);
+        mux.position.set(1.2, 0.65, 1.5);
+        mux.visible = false; // ซ่อนไว้ก่อน
+        gloveGroup.add(mux);
+
+        // 6. ฟังก์ชันจัดการ UI สลับเวอร์ชัน
+        function switchVersion(v) {
+            document.getElementById('btn-v1').classList.remove('active');
+            document.getElementById('btn-v2').classList.remove('active');
+            document.getElementById('btn-v' + v).classList.add('active');
+
+            const desc = document.getElementById('description');
+
+            if (v === 1) {
+                bat9V.visible = true;
+                batLipo.visible = false;
+                mux.visible = false;
+                desc.innerHTML = "<b>V1:</b> Pico W + 9V Battery + 5 Flex directly. <br><span style='color:red;'>Error: Pico W only has 4 Analog pins! 9V will burn the board.</span>";
+            } else {
+                bat9V.visible = false;
+                batLipo.visible = true;
+                mux.visible = true;
+                desc.innerHTML = "<b>V2:</b> Pico W + Li-Po 3.7V + <b>CD74HC4067 (MUX)</b>.<br><span style='color:#2ecc71;'>Safe: MUX handles 5 Flex inputs to 1 pin. Li-Po is safe.</span>";
+            }
+        }
+
+        // 7. Render Loop ให้โมเดลขยับได้
+        function animate() {
+            requestAnimationFrame(animate);
+            // ให้ถุงมือหมุนนิดๆ โชว์ความเท่
+            gloveGroup.rotation.y += 0.005;
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Responsive หน้าจอ
+        window.addEventListener('resize', () => {
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+        });
+    </script>
 </body>
 </html>
